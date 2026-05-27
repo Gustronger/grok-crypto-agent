@@ -388,21 +388,38 @@ def get_top_futures_coins(limit=50):
 
 @st.cache_data(ttl=120)
 def fetch_ohlcv(symbol, timeframe='1h', limit=100):
-    """Fetch OHLCV dari Binance Futures"""
-    try:
-        exchange = ccxt.binance({
-            'enableRateLimit': True,
-            'options': {'defaultType': 'future'}
-        })
-        ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
-        
-        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-        df['symbol'] = symbol
-        return df
-    except Exception as e:
-        st.warning(f"Gagal fetch data {symbol} {timeframe}: {e}")
-        return None
+    """Fetch OHLCV dari Binance, fallback ke Bybit jika Binance dibatasi"""
+    exchanges_to_try = ['binance', 'bybit']
+    
+    for ex_name in exchanges_to_try:
+        try:
+            if ex_name == 'binance':
+                exchange = ccxt.binance({
+                    'enableRateLimit': True,
+                    'options': {'defaultType': 'future'}
+                })
+            else:  # bybit
+                exchange = ccxt.bybit({
+                    'enableRateLimit': True,
+                    'options': {'defaultType': 'future'}
+                })
+            
+            ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+            
+            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            df['symbol'] = symbol
+            return df
+            
+        except Exception as e:
+            if "451" in str(e) or "restricted" in str(e).lower():
+                continue  # coba exchange berikutnya
+            else:
+                st.warning(f"Gagal fetch data dari {ex_name}: {str(e)[:80]}")
+                return None
+    
+    st.error("⚠️ Semua exchange (Binance & Bybit) sedang dibatasi. Data chart tidak tersedia saat ini.")
+    return None
 
 def get_news_sentiment(symbol):
     """Ambil link berita & sentiment sederhana"""
@@ -417,35 +434,57 @@ def get_news_sentiment(symbol):
 
 
 def get_funding_and_oi(symbol):
-    """Ambil Funding Rate & Open Interest dari Binance Futures (sangat penting untuk futures trading)"""
-    try:
-        exchange = ccxt.binance({
-            'enableRateLimit': True,
-            'options': {'defaultType': 'future'}
-        })
-        
-        # Funding Rate
-        funding = exchange.fetch_funding_rate(symbol)
-        funding_rate = funding.get('fundingRate', 0) * 100  # dalam persen
-        next_funding = funding.get('nextFundingTime')
-        
-        # Open Interest
-        oi_data = exchange.fetch_open_interest(symbol)
-        open_interest = oi_data.get('openInterestAmount', 0) if oi_data else 0
-        
-        return {
-            'funding_rate': round(funding_rate, 4),
-            'next_funding': next_funding,
-            'open_interest': open_interest,
-            'symbol': symbol
-        }
-    except Exception as e:
-        return {
-            'funding_rate': None,
-            'next_funding': None,
-            'open_interest': None,
-            'error': str(e)
-        }
+    """Ambil Funding Rate & Open Interest (fallback ke Bybit jika Binance dibatasi)"""
+    exchanges_to_try = ['binance', 'bybit']
+    
+    for ex_name in exchanges_to_try:
+        try:
+            if ex_name == 'binance':
+                exchange = ccxt.binance({
+                    'enableRateLimit': True,
+                    'options': {'defaultType': 'future'}
+                })
+            else:
+                exchange = ccxt.bybit({
+                    'enableRateLimit': True,
+                    'options': {'defaultType': 'future'}
+                })
+            
+            # Funding Rate
+            funding = exchange.fetch_funding_rate(symbol)
+            funding_rate = funding.get('fundingRate', 0) * 100
+            
+            # Open Interest
+            try:
+                oi_data = exchange.fetch_open_interest(symbol)
+                open_interest = oi_data.get('openInterestAmount', 0) if oi_data else 0
+            except:
+                open_interest = 0
+            
+            return {
+                'funding_rate': round(funding_rate, 4),
+                'next_funding': funding.get('nextFundingTime'),
+                'open_interest': open_interest,
+                'symbol': symbol,
+                'source': ex_name
+            }
+        except Exception as e:
+            if "451" in str(e) or "restricted" in str(e).lower():
+                continue
+            else:
+                return {
+                    'funding_rate': None,
+                    'next_funding': None,
+                    'open_interest': None,
+                    'error': str(e)
+                }
+    
+    return {
+        'funding_rate': None,
+        'next_funding': None,
+        'open_interest': None,
+        'error': 'Semua exchange dibatasi'
+    }
 
 
 # ==================== MULTI-TIMEFRAME & LIQUIDITY (AGENT LEVEL) ====================
