@@ -333,37 +333,31 @@ def generate_trading_setup(df, current_price, bias, fib_levels, order_blocks, at
 
 @st.cache_data(ttl=300)
 def get_top_futures_coins(limit=50):
-    """Ambil daftar koin dengan futures dari Binance via CCXT + filter volume"""
+    """Ambil daftar koin populer yang biasanya punya futures (fallback friendly)"""
     try:
-        exchange = ccxt.binance({
-            'enableRateLimit': True,
-            'options': {'defaultType': 'future'}
-        })
-        markets = exchange.load_markets()
-        
-        # Ambil semua perpetual futures USDT
-        futures_symbols = []
-        for symbol, market in markets.items():
-            if market.get('swap') and market.get('quote') == 'USDT' and market.get('active'):
-                base = market['base']
-                futures_symbols.append(base)
-        
-        # Ambil data market cap/volume dari CoinGecko
+        # Prioritaskan CoinGecko (lebih reliable di banyak lokasi)
         url = "https://api.coingecko.com/api/v3/coins/markets"
         params = {
             'vs_currency': 'usd',
             'order': 'volume_desc',
-            'per_page': 250,
+            'per_page': 100,
             'page': 1,
             'sparkline': False
         }
         resp = requests.get(url, params=params, timeout=15)
         data = resp.json()
         
+        # Daftar koin yang biasanya punya futures perpetual
+        common_futures_coins = {
+            'BTC', 'ETH', 'SOL', 'XRP', 'DOGE', 'ADA', 'AVAX', 'SHIB', 'DOT', 'LINK',
+            'TON', 'TRX', 'NEAR', 'MATIC', 'LTC', 'BCH', 'UNI', 'ATOM', 'XLM', 'ETC',
+            'FIL', 'APT', 'ARB', 'OP', 'SUI', 'PEPE', 'WIF', 'BONK', 'FLOKI', 'JUP'
+        }
+        
         coins_data = []
         for coin in data:
             symbol = coin['symbol'].upper()
-            if symbol in futures_symbols and coin.get('total_volume', 0) > 5_000_000:  # minimal volume
+            if symbol in common_futures_coins and coin.get('total_volume', 0) > 3_000_000:
                 coins_data.append({
                     'symbol': symbol,
                     'name': coin['name'],
@@ -374,17 +368,22 @@ def get_top_futures_coins(limit=50):
                     'futures_symbol': f"{symbol}/USDT:USDT"
                 })
         
-        df = pd.DataFrame(coins_data)
-        df = df.sort_values('volume_24h', ascending=False).head(limit)
-        return df.reset_index(drop=True)
-        
+        if coins_data:
+            df = pd.DataFrame(coins_data)
+            df = df.sort_values('volume_24h', ascending=False).head(limit)
+            return df.reset_index(drop=True)
+        else:
+            raise Exception("No coins found from CoinGecko")
+            
     except Exception as e:
-        st.error(f"Error fetching futures list: {str(e)}")
-        # Fallback sample data
+        # Fallback jika CoinGecko juga bermasalah
+        st.warning(f"⚠️ Gagal mengambil data real-time. Menampilkan data contoh. Error: {str(e)[:100]}")
         return pd.DataFrame([
             {'symbol': 'BTC', 'name': 'Bitcoin', 'price': 68000, 'volume_24h': 25000000000, 'change_24h': 1.2, 'futures_symbol': 'BTC/USDT:USDT'},
             {'symbol': 'ETH', 'name': 'Ethereum', 'price': 3200, 'volume_24h': 12000000000, 'change_24h': -0.8, 'futures_symbol': 'ETH/USDT:USDT'},
             {'symbol': 'SOL', 'name': 'Solana', 'price': 145, 'volume_24h': 4500000000, 'change_24h': 3.5, 'futures_symbol': 'SOL/USDT:USDT'},
+            {'symbol': 'XRP', 'name': 'Ripple', 'price': 0.52, 'volume_24h': 1800000000, 'change_24h': 2.1, 'futures_symbol': 'XRP/USDT:USDT'},
+            {'symbol': 'DOGE', 'name': 'Dogecoin', 'price': 0.15, 'volume_24h': 950000000, 'change_24h': -1.5, 'futures_symbol': 'DOGE/USDT:USDT'},
         ])
 
 @st.cache_data(ttl=120)
